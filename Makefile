@@ -11,27 +11,6 @@ REAL_USER := $(shell echo $${SUDO_USER:-$$(whoami)})
 all:
 	$(MAKE) -C $(KDIR) M=$(PWD) modules
 
-	# --- auto sign block ---
-	# Check if keys exist before attempting to sign
-	@if [ -f "$(HOME)/module-signing/MOK.priv" ] && [ -f "$(HOME)/module-signing/MOK.der" ]; then \
-	if [ -x "/lib/modules/$(KVER)/build/scripts/sign-file" ]; then \
-	SIGN_TOOL="/lib/modules/$(KVER)/build/scripts/sign-file"; \
-	elif [ -x "/usr/src/linux-headers-$(KVER)/scripts/sign-file" ]; then \
-	SIGN_TOOL="/usr/src/linux-headers-$(KVER)/scripts/sign-file"; \
-	else \
-	echo "ERROR: sign-file tool not found, but MOK keys exist."; \
-	exit 1; \
-	fi; \
-	echo "Signing module linuwu_sense.ko using $$SIGN_TOOL"; \
-	sudo $$SIGN_TOOL sha256 \
-	$(HOME)/module-signing/MOK.priv \
-	$(HOME)/module-signing/MOK.der \
-	$(PWD)/src/linuwu_sense.ko; \
-	else \
-	echo "MOK keys not found in ~/module-signing/. Skipping module signing (Common for non-Secure Boot)."; \
-	fi
-	# --- end auto sign block ---
-
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
 
@@ -64,7 +43,6 @@ install: all
 	sudo depmod -a
 	@echo "$(MODNAME)" | sudo tee /etc/modules-load.d/$(MODNAME).conf > /dev/null
 	sudo modprobe $(MODNAME)
-	@sleep 2
 	@sudo cp linuwu_sense.service /etc/systemd/system/
 	@sudo systemctl daemon-reload
 	@sudo systemctl enable linuwu_sense.service
