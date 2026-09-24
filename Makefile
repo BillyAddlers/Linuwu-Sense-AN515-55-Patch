@@ -13,7 +13,13 @@ REAL_USER := $(shell echo $${SUDO_USER:-$$(whoami)})
 KCONFIG := $(KDIR)/.config
 CC_IS_CLANG := $(shell grep -q '^CONFIG_CC_IS_CLANG=y' $(KCONFIG) 2>/dev/null && echo 1)
 ifeq ($(strip $(CC_IS_CLANG)),)
+# /proc/config.gz describes the *running* kernel only. When building against a
+# different kernel, trust the target kernel's own .config instead of assuming
+# the running kernel's toolchain (e.g. a gcc-built LTS kernel with a clang
+# running kernel would otherwise be built with the wrong compiler).
+ifeq ($(KVER),$(shell uname -r))
 CC_IS_CLANG := $(shell zcat /proc/config.gz 2>/dev/null | grep -q '^CONFIG_CC_IS_CLANG=y' && echo 1)
+endif
 endif
 LLVM ?= $(strip $(CC_IS_CLANG))
 
