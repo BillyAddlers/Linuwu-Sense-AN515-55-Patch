@@ -6,13 +6,22 @@ PWD   := $(shell pwd)
 
 MDIR  := /lib/modules/$(KVER)/kernel/drivers/platform/x86
 MODNAME := linuwu_sense
+
+DKMS_VERSION := $(shell sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' dkms.conf)
 REAL_USER := $(shell echo $${SUDO_USER:-$$(whoami)})
 
+KCONFIG := $(KDIR)/.config
+CC_IS_CLANG := $(shell grep -q '^CONFIG_CC_IS_CLANG=y' $(KCONFIG) 2>/dev/null && echo 1)
+ifeq ($(strip $(CC_IS_CLANG)),)
+CC_IS_CLANG := $(shell zcat /proc/config.gz 2>/dev/null | grep -q '^CONFIG_CC_IS_CLANG=y' && echo 1)
+endif
+LLVM ?= $(strip $(CC_IS_CLANG))
+
 all:
-	$(MAKE) -C $(KDIR) M=$(PWD) modules
+	$(MAKE) -C $(KDIR) M=$(PWD) LLVM=$(LLVM) modules
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(PWD) clean
+	$(MAKE) -C $(KDIR) M=$(PWD) LLVM=$(LLVM) clean
 
 uninstall:
 	@sudo rm -f /etc/modules-load.d/$(MODNAME).conf
@@ -22,6 +31,10 @@ uninstall:
 	@sudo rm -f /etc/systemd/system/linuwu_sense.service
 	@sudo systemctl daemon-reload
 	@sudo rmmod $(MODNAME) 2>/dev/null || true
+	@echo "Removing DKMS module registration (if any)..."
+	@if command -v dkms >/dev/null 2>&1; then \
+		sudo dkms remove -m $(MODNAME) -v $(DKMS_VERSION) --all 2>/dev/null || true; \
+	fi
 	@sudo modprobe acer_wmi
 	@echo "Removing current user from linuwu_sense group if exists..."
 	@if getent group linuwu_sense >/dev/null; then \
@@ -80,4 +93,12 @@ install: all
 		echo "Warning: Could not detect predator_sense or nitro_sense in sysfs."; \
 	fi
 	@echo "Module $(MODNAME) installed and configured to load at boot."
+
+dkms-install:
+	sudo ./scripts/install-dkms.sh
+
+dkms-uninstall:
+	sudo ./scripts/uninstall-dkms.sh
+
+.PHONY: all clean install uninstall dkms-install dkms-uninstall
 

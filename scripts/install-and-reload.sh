@@ -17,9 +17,24 @@ echo "Runtime module:"
 cat /sys/module/linuwu_sense/srcversion
 
 echo "Installed module:"
-modinfo "/lib/modules/$(uname -r)/kernel/drivers/platform/x86/linuwu_sense.ko" | grep '^srcversion'
-
-echo "Platform profiles:"
-cat /sys/firmware/acpi/platform_profile_choices
-cat /sys/firmware/acpi/platform_profile
+# Locate the module either via DKMS (updates/dkms) or a direct make install.
+INSTALLED_KO=""
+for candidate in \
+  "/lib/modules/$(uname -r)/updates/dkms/linuwu_sense.ko" \
+  "/lib/modules/$(uname -r)/kernel/drivers/platform/x86/linuwu_sense.ko"; do
+  if [ -f "$candidate" ]; then
+    INSTALLED_KO="$candidate"
+    break
+  fi
+done
+if [ -n "$INSTALLED_KO" ]; then
+  echo "Module file: $INSTALLED_KO"
+  modinfo "$INSTALLED_KO" | grep '^srcversion'
+else
+  echo "(module file not found in expected locations)"
+fi
+if command -v dkms >/dev/null 2>&1; then
+  echo "DKMS status:"
+  dkms status linuwu_sense 2>/dev/null || true
+fi
 
