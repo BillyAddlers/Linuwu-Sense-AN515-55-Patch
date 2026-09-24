@@ -22,7 +22,37 @@ Tested on:
 
 ## Install
 
-### Option 1 — DKMS (recommended)
+### Option 1 — AUR package (recommended, Arch-based)
+
+On Arch Linux (or any Arch-based distro) the patched driver is packaged on the AUR as
+[`linuwu-sense-an515-55-dkms`](https://aur.archlinux.org/packages/linuwu-sense-an515-55-dkms).
+Grab it with your AUR helper:
+
+```bash
+yay -S linuwu-sense-an515-55-dkms
+# or:
+paru -S linuwu-sense-an515-55-dkms
+```
+
+The package builds this repo's latest `main` through DKMS, so it behaves just like the
+source-based DKMS install below:
+
+- Rebuilds automatically on every kernel update
+- Module lands at `/lib/modules/$(uname -r)/updates/dkms/linuwu_sense.ko`
+- Blacklists the stock `acer_wmi` driver so it doesn't conflict
+- Enables auto-load on boot + the `linuwu_sense` systemd service
+- Sets up the `linuwu_sense` group and `tmpfiles.d` permissions
+
+Check the result:
+
+```bash
+dkms status linuwu_sense
+modinfo /lib/modules/$(uname -r)/updates/dkms/linuwu_sense.ko | grep '^srcversion'
+```
+
+Not on an Arch-based distro, or prefer to build it yourself? Both options are below.
+
+### Option 2 — DKMS from source
 
 The module is rebuilt automatically on every kernel update:
 
@@ -46,7 +76,7 @@ dkms status linuwu_sense
 modinfo /lib/modules/$(uname -r)/updates/dkms/linuwu_sense.ko | grep '^srcversion'
 ```
 
-### Option 2 — manual build (no DKMS)
+### Option 3 — manual build (no DKMS)
 
 From this directory:
 
