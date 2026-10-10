@@ -43,6 +43,11 @@ sudo cp "$ROOT_DIR/linuwu_sense.service" /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable linuwu_sense.service
 
+if [[ -f "$ROOT_DIR/bin/nitro" ]]; then
+  echo "==> Installing nitro CLI control center"
+  sudo install -m 755 "$ROOT_DIR/bin/nitro" /usr/local/bin/nitro
+fi
+
 echo "==> Loading module"
 sudo modprobe "$MODNAME"
 sudo systemctl start linuwu_sense.service 2>/dev/null || true
@@ -62,7 +67,7 @@ if [[ -n "$model_path" ]]; then
   conf_file="/etc/tmpfiles.d/$MODNAME.conf"
   [[ -f "$conf_file" ]] || sudo touch "$conf_file"
   if echo "$model_path" | grep -q "nitro_sense"; then
-    supported_fields="fan_speed battery_limiter battery_calibration usb_charging"
+    supported_fields="fan_speed battery_limiter battery_calibration usb_charging backlight_timeout"
   else
     supported_fields="backlight_timeout battery_calibration battery_limiter boot_animation_sound fan_speed lcd_override usb_charging"
   fi
@@ -72,7 +77,7 @@ if [[ -n "$model_path" ]]; then
   done
   kb_base="/sys/module/$MODNAME/drivers/platform:acer-wmi/acer-wmi/four_zoned_kb"
   if [[ -d "$kb_base" ]]; then
-    for z in four_zone_mode per_zone_mode; do
+    for z in four_zone_mode per_zone_mode brightness; do
       entry="f $kb_base/$z 0660 root $MODNAME"
       grep -qxF "$entry" "$conf_file" || echo "$entry" | sudo tee -a "$conf_file" > /dev/null
     done

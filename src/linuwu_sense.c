@@ -3656,6 +3656,8 @@ static ssize_t predator_backlight_timeout_show(struct device *dev,
                                                char *buf) {
   acpi_status status;
   u64 result;
+  u8 timeout;
+
   status = WMI_apgeaction_execute_u64(ACER_WMID_GET_FUNCTION, 0x88401, &result);
   if (ACPI_FAILURE(status)) {
     pr_err("Error getting backlight_timeout status: %s\n",
@@ -3663,10 +3665,12 @@ static ssize_t predator_backlight_timeout_show(struct device *dev,
     return -ENODEV;
   }
   pr_info("backlight_timeout get status: %llu\n", result);
-  return sprintf(buf, "%d\n",
-                 result == 0x1E0000080000 ? 1
-                 : result == 0x80000      ? 0
-                                          : -1);
+  timeout = (result >> 40) & 0xff;
+  if (timeout == 0x1E)
+    return sprintf(buf, "1\n");
+  if (timeout == 0 || result == 0x80000)
+    return sprintf(buf, "0\n");
+  return sprintf(buf, "-1\n");
 }
 
 static ssize_t predator_backlight_timeout_store(struct device *dev,
@@ -3679,7 +3683,7 @@ static ssize_t predator_backlight_timeout_store(struct device *dev,
     return -EINVAL;
   if ((val != 0) && (val != 1))
     return -EINVAL;
-  pr_info("bascklight_timeout set value: %d\n", val);
+  pr_info("backlight_timeout set value: %d\n", val);
   status = WMI_apgeaction_execute_u64(
       ACER_WMID_SET_FUNCTION, val == 1 ? 0x1E0000088402 : 0x88402, &result);
   if (ACPI_FAILURE(status)) {
@@ -3906,6 +3910,8 @@ struct kb_state {
 } __packed;
 
 static struct kb_state current_kb_state;
+static bool zones_initialized;
+static bool static_initialized;
 
 /* four zone mode */
 static ssize_t four_zoned_rgb_kb_show(struct device *dev,
@@ -4028,8 +4034,15 @@ static ssize_t four_zoned_rgb_kb_store(struct device *dev,
     return -ENODEV;
   }
 
-  /* Set per_zone to 0 */
+  current_kb_state.mode = mode;
+  current_kb_state.speed = speed;
+  current_kb_state.brightness = brightness;
+  current_kb_state.direction = direction;
+  current_kb_state.red = red;
+  current_kb_state.green = green;
+  current_kb_state.blue = blue;
   current_kb_state.per_zone = 0;
+  static_initialized = true;
 
   return count;
 }
@@ -4129,9 +4142,9 @@ static acpi_status set_per_zone_color(struct per_zone_color *input) {
   }
 
   for (int i = 0; i < 4; i++) {
-    *zones[i] = (cpu_to_be64(*zones[i]) >> 32) | zone_ids[i];
+    u64 zone_payload = (cpu_to_be64(*zones[i]) >> 32) | zone_ids[i];
     status = WMI_gaming_execute_u64(ACER_WMID_SET_GAMING_RGB_KB_METHODID,
-                                    *zones[i], NULL);
+                                    zone_payload, NULL);
     if (ACPI_FAILURE(status)) {
       pr_err("Error setting KB color (zone %d): %s\n", i + 1,
              acpi_format_exception(status));
@@ -4148,10 +4161,14 @@ static acpi_status set_per_zone_color(struct per_zone_color *input) {
 static ssize_t per_zoned_rgb_kb_show(struct device *dev,
                                      struct device_attribute *attr, char *buf) {
   struct per_zone_color output;
-  acpi_status status;
-  status = get_per_zone_color(&output);
-  if (ACPI_FAILURE(status)) {
-    return -ENODEV;
+
+  if (current_kb_state.per_zone && zones_initialized) {
+    output = current_kb_state.zones;
+    output.brightness = current_kb_state.brightness;
+  } else {
+    acpi_status status = get_per_zone_color(&output);
+    if (ACPI_FAILURE(status))
+      return -ENODEV;
   }
   return sprintf(buf, "%06llx,%06llx,%06llx,%06llx,%d\n", output.zone1,
                  output.zone2, output.zone3, output.zone4, output.brightness);
@@ -4163,7 +4180,7 @@ static ssize_t per_zoned_rgb_kb_store(struct device *dev,
   int i = 0;
   size_t len;
   char *token;
-  char str_buf[34];
+  char str_buf[48];
   struct per_zone_color colors;
   char *input_ptr = str_buf;
   len = min(count, sizeof(str_buf) - 1);
@@ -4174,17 +4191,35 @@ static ssize_t per_zoned_rgb_kb_store(struct device *dev,
 
   acpi_status status;
 
-  /* zone1,zone2,zone3,zone4 */
+  /* zone1,zone2,zone3,zone4 - accepts 6 hex (RRGGBB) or 8 hex (RRGGBBAA with transparency) */
 
   while ((token = strsep(&input_ptr, ",")) && i < 4) {
-    if (strlen(token) != 6) {
-      pr_err("Invalid rgb length: %s (%lu) (must be 3 bytes)\n", token,
-             strlen(token));
+    size_t token_len = strlen(token);
+    u64 hex_val;
+
+    if (token_len != 6 && token_len != 8) {
+      pr_err("Invalid rgb length: %s (%lu) (must be 6 or 8 hex chars)\n", token,
+             token_len);
       return -EINVAL;
     }
-    if (kstrtoull(token, 16, &((u64 *)&colors)[i])) {
+    if (kstrtoull(token, 16, &hex_val)) {
       pr_err("Invalid hex value: %s\n", token);
       return -EINVAL;
+    }
+
+    if (token_len == 8) {
+      /* RRGGBBAA format: scale R, G, B channels by Alpha (transparency/opacity) */
+      u32 r = (hex_val >> 24) & 0xff;
+      u32 g = (hex_val >> 16) & 0xff;
+      u32 b = (hex_val >> 8) & 0xff;
+      u32 a = hex_val & 0xff;
+
+      r = (r * a) / 255;
+      g = (g * a) / 255;
+      b = (b * a) / 255;
+      ((u64 *)&colors)[i] = ((u64)r << 16) | ((u64)g << 8) | b;
+    } else {
+      ((u64 *)&colors)[i] = hex_val;
     }
     i++;
   }
@@ -4201,6 +4236,12 @@ static ssize_t per_zoned_rgb_kb_store(struct device *dev,
     pr_err("Error setting RGB KB status.\n");
     return -ENODEV;
   }
+
+  current_kb_state.zones = colors;
+  current_kb_state.brightness = colors.brightness;
+  current_kb_state.per_zone = 1;
+  zones_initialized = true;
+
   return count;
 }
 
@@ -4224,12 +4265,16 @@ static int four_zone_kb_state_update(void) {
   current_kb_state.red = out.gmOutput[5];
   current_kb_state.green = out.gmOutput[6];
   current_kb_state.blue = out.gmOutput[7];
+  static_initialized = true;
 
-  // Get per-zone color data
-  status = get_per_zone_color(&current_kb_state.zones);
-  if (ACPI_FAILURE(status)) {
-    pr_err("get_per_zone_color failed!");
-    return -1;
+  // Get per-zone color data if not already cached
+  if (!zones_initialized) {
+    status = get_per_zone_color(&current_kb_state.zones);
+    if (ACPI_FAILURE(status)) {
+      pr_err("get_per_zone_color failed!");
+      return -1;
+    }
+    zones_initialized = true;
   }
   return 0;
 }
@@ -4288,12 +4333,14 @@ static int four_zone_kb_state_load(void) {
   }
 
   if (current_kb_state.per_zone) {
+    zones_initialized = true;
     status = set_per_zone_color(&current_kb_state.zones);
     if (ACPI_FAILURE(status)) {
       pr_err("Error setting RGB KB status.\n");
       return -1;
     }
   } else {
+    static_initialized = true;
     status = set_kb_status(current_kb_state.mode, current_kb_state.speed,
                            current_kb_state.brightness,
                            current_kb_state.direction, current_kb_state.red,
@@ -4308,13 +4355,79 @@ static int four_zone_kb_state_load(void) {
   return 0;
 }
 
+static ssize_t four_zoned_brightness_show(struct device *dev,
+                                          struct device_attribute *attr,
+                                          char *buf) {
+  struct get_four_zoned_kb_output out;
+  acpi_status status = get_kb_status(&out);
+  if (ACPI_FAILURE(status))
+    return -ENODEV;
+  return sprintf(buf, "%d\n", out.gmOutput[2]);
+}
+
+static ssize_t four_zoned_brightness_store(struct device *dev,
+                                           struct device_attribute *attr,
+                                           const char *buf, size_t count) {
+  int val;
+  acpi_status status;
+
+  if (kstrtoint(buf, 10, &val) || val < 0 || val > 100) {
+    pr_err("Invalid brightness value (must be 0-100).\n");
+    return -EINVAL;
+  }
+
+  if (current_kb_state.per_zone) {
+    struct per_zone_color colors = current_kb_state.zones;
+    if (!zones_initialized) {
+      status = get_per_zone_color(&colors);
+      if (ACPI_FAILURE(status) || (colors.zone1 == 0 && colors.zone2 == 0 &&
+                                   colors.zone3 == 0 && colors.zone4 == 0)) {
+        colors.zone1 = 0xffffff;
+        colors.zone2 = 0xffffff;
+        colors.zone3 = 0xffffff;
+        colors.zone4 = 0xffffff;
+      }
+      current_kb_state.zones = colors;
+      zones_initialized = true;
+    }
+    colors.brightness = val;
+    status = set_per_zone_color(&colors);
+    if (ACPI_SUCCESS(status))
+      current_kb_state.zones.brightness = val;
+  } else {
+    if (!static_initialized && current_kb_state.mode == 0 &&
+        current_kb_state.red == 0 && current_kb_state.green == 0 &&
+        current_kb_state.blue == 0) {
+      current_kb_state.red = 255;
+      current_kb_state.green = 255;
+      current_kb_state.blue = 255;
+      static_initialized = true;
+    }
+    status = set_kb_status(current_kb_state.mode, current_kb_state.speed,
+                           val, current_kb_state.direction,
+                           current_kb_state.red, current_kb_state.green,
+                           current_kb_state.blue);
+  }
+
+  if (ACPI_FAILURE(status)) {
+    pr_err("Error setting keyboard brightness.\n");
+    return -ENODEV;
+  }
+
+  current_kb_state.brightness = val;
+  return count;
+}
+
 /* Four Zoned Keyboard Attributes */
 static struct device_attribute four_zoned_rgb_mode = __ATTR(
     four_zone_mode, 0644, four_zoned_rgb_kb_show, four_zoned_rgb_kb_store);
 static struct device_attribute per_zoned_rgb_mode =
     __ATTR(per_zone_mode, 0644, per_zoned_rgb_kb_show, per_zoned_rgb_kb_store);
+static struct device_attribute four_zoned_brightness_mode = __ATTR(
+    brightness, 0644, four_zoned_brightness_show, four_zoned_brightness_store);
 static struct attribute *four_zoned_kb_attrs[] = {
-    &four_zoned_rgb_mode.attr, &per_zoned_rgb_mode.attr, NULL};
+    &four_zoned_rgb_mode.attr, &per_zoned_rgb_mode.attr,
+    &four_zoned_brightness_mode.attr, NULL};
 
 /* Four Zoned RGB Keyboard */
 static struct attribute_group four_zoned_kb_attr_group = {
@@ -4376,7 +4489,8 @@ static int acer_platform_probe(struct platform_device *device) {
     err = sysfs_create_group(&device->dev.kobj, &four_zoned_kb_attr_group);
     if (err)
       goto error_four_zone;
-    four_zone_kb_state_load();
+    if (four_zone_kb_state_load() != 0)
+      four_zone_kb_state_update();
   }
 
   return 0;

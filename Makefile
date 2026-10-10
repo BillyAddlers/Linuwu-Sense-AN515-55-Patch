@@ -50,6 +50,7 @@ uninstall:
 		echo "Group linuwu_sense does not exist."; \
 	fi
 	@sudo rm -f /etc/tmpfiles.d/$(MODNAME).conf
+	@sudo rm -f /usr/local/bin/nitro
 	@sudo rm -f $(MDIR)/$(MODNAME).ko
 	@sudo depmod -a
 	@echo "Uninstalled $(MODNAME) and cleaned up related configuration."
@@ -61,9 +62,12 @@ install: all
 	sudo install -m 644 src/$(MODNAME).ko $(MDIR)
 	sudo depmod -a
 	@echo "$(MODNAME)" | sudo tee /etc/modules-load.d/$(MODNAME).conf > /dev/null
-	sudo modprobe $(MODNAME)
 	@sudo cp linuwu_sense.service /etc/systemd/system/
 	@sudo systemctl daemon-reload
+	@if [ -f bin/nitro ]; then \
+		sudo install -m 755 bin/nitro /usr/local/bin/nitro; \
+	fi
+	sudo modprobe $(MODNAME)
 	@sudo systemctl enable linuwu_sense.service
 	@sudo systemctl start linuwu_sense.service
 	@echo "Setting up group and permissions..."
@@ -79,7 +83,7 @@ install: all
 		conf_file="/etc/tmpfiles.d/$(MODNAME).conf"; \
 		[ -f $$conf_file ] || sudo touch $$conf_file; \
 		if echo "$$model_path" | grep -q "nitro_sense"; then \
-			supported_fields="fan_speed battery_limiter battery_calibration usb_charging"; \
+			supported_fields="fan_speed battery_limiter battery_calibration usb_charging backlight_timeout"; \
 		else \
 			supported_fields="backlight_timeout battery_calibration battery_limiter boot_animation_sound fan_speed lcd_override usb_charging"; \
 		fi; \
@@ -89,7 +93,7 @@ install: all
 		done; \
 		kb_base="/sys/module/$(MODNAME)/drivers/platform:acer-wmi/acer-wmi/four_zoned_kb"; \
 		if [ -d "$$kb_base" ]; then \
-			for z in four_zone_mode per_zone_mode; do \
+			for z in four_zone_mode per_zone_mode brightness; do \
 				entry="f $$kb_base/$$z 0660 root $(MODNAME)"; \
 				grep -qxF "$$entry" $$conf_file || echo "$$entry" | sudo tee -a $$conf_file > /dev/null; \
 			done; \
