@@ -557,6 +557,13 @@ static struct quirk_entry quirk_acer_nitro_an515_55 = {
     .an515_58_rgb_fix = 1,
 };
 
+/* Acer Nitro AN515-57 (board Scala_TLS): fans + thermal profiles only.
+ * Keyboard on this model is a fixed red backlight, no RGB zones.
+ */
+static struct quirk_entry quirk_acer_nitro_an515_57 = {
+    .nitro_sense = 1,
+};
+
 static struct quirk_entry quirk_acer_nitro = {
     .nitro_sense = 1,
 };
@@ -675,6 +682,16 @@ static const struct dmi_system_id acer_quirks[] __initconst = {
                 DMI_MATCH(DMI_PRODUCT_NAME, "Nitro AN515-55"),
             },
         .driver_data = &quirk_acer_nitro_an515_55,
+    },
+    {
+        .callback = dmi_matched,
+        .ident = "Acer Nitro AN515-57",
+        .matches =
+            {
+                DMI_MATCH(DMI_SYS_VENDOR, "Acer"),
+                DMI_MATCH(DMI_PRODUCT_NAME, "Nitro AN515-57"),
+            },
+        .driver_data = &quirk_acer_nitro_an515_57,
     },
     {
         .callback = dmi_matched,
